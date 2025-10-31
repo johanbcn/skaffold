@@ -17,8 +17,12 @@ limitations under the License.
 package kustomize
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/GoogleContainerTools/skaffold/v2/pkg/skaffold/render"
+	"github.com/GoogleContainerTools/skaffold/v2/pkg/skaffold/schema/latest"
 	"github.com/GoogleContainerTools/skaffold/v2/testutil"
 )
 
@@ -83,6 +87,66 @@ func TestBuildCommandArgs(t *testing.T) {
 		testutil.Run(t, test.description, func(t *testutil.T) {
 			args := kustomizeBuildArgs(test.buildArgs, test.kustomizePath)
 			t.CheckDeepEqual(test.expectedArgs, args)
+		})
+	}
+}
+
+func TestMirror(t *testing.T) {
+	tests := []struct {
+		description     string
+		kustomization   string
+		additionalFiles map[string]string
+	}{
+		{
+			description: "Mirroring generators with keys",
+			kustomization: `configMapGenerator:
+  - name: app-env
+    envs:
+      - app.env
+  - name: app-config
+    files:
+      - credentials.pub=credentials.local.pub
+      - setup.json
+
+secretGenerator:
+  - name: app-env-secrets
+    envs:
+      - secrets.env
+  - name: app-config-secrets
+    files:
+      - credentials.key=credentials.local.key
+      - eyesonly.txt
+`,
+		},
+	}
+
+	for _, test := range tests {
+		testutil.Run(t, test.description, func(t *testutil.T) {
+			sourceDir := t.NewTempDir()
+			sourceDir.Write("kustomization.yaml", test.kustomization)
+
+			for path, contents := range test.additionalFiles {
+				sourceDir.Write(path, contents)
+			}
+
+			mockCfg := render.MockConfig{WorkingDir: sourceDir.Root()}
+
+			rc := latest.RenderConfig{Generate: latest.Generate{
+				Kustomize: &latest.Kustomize{
+					Paths: []string{sourceDir.Root()},
+				},
+			}}
+
+			k, err := New(mockCfg, rc, map[string]string{}, "default", "", nil, false)
+			t.CheckNoError(err)
+
+			targetDir := t.NewTempDir()
+			fs := newTmpFS(targetDir.Root())
+			defer fs.Cleanup()
+
+			k.mirror(sourceDir.Root(), fs)
+			fmt.Printf("From: %s -- To: %s\n", sourceDir.Root(), targetDir.Root())
+			time.Sleep(30 * time.Second)
 		})
 	}
 }
